@@ -23,11 +23,16 @@ public class FileScannerController {
 
     @PostMapping("/scan")
     public ResponseEntity<List<SignatureScanResult>> scanFile(@RequestParam("file") MultipartFile file) {
+        if (file.isEmpty()) {
+            return ResponseEntity.badRequest().body(Collections.emptyList());
+        }
         try {
             List<SignatureScanResult> results = fileScannerService.scanFile(file);
             return ResponseEntity.ok(results);
         } catch (IOException e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Collections.emptyList());
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Collections.singletonList(new SignatureScanResult(null, "Error: " + e.getMessage(), 0, 0, false)));
         }
     }
 }
