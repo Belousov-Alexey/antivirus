@@ -6,7 +6,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 
 @Entity
@@ -50,9 +49,4 @@ public class SignatureEntity {
 
     @Column(name = "status", nullable = false)
     private String status;
-
-    // Дополнительный сеттер для преобразования строки в байты
-    public void setFirstBytes(String firstBytesString) {
-        this.firstBytes = firstBytesString.getBytes(StandardCharsets.UTF_8);
-    }
 }

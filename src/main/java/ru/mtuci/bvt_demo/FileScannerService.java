@@ -6,20 +6,24 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 @Service
 public class FileScannerService {
     private final SignatureRepository signatureRepository;
-    private static final int WINDOW_SIZE = 8; // Размер окна для first_bytes
-    private static final int BASE = 256; // Основание для хэша Рабина-Карпа
-    private static final long MOD = 1000000007L; // Модуль для хэша
+    private final SignatureHistoryRepository historyRepository;
+    private final SignatureAuditRepository auditRepository;
+    private static final int WINDOW_SIZE = 8;
+    private static final int BASE = 256;
+    private static final long MOD = 1000000007L;
 
-    public FileScannerService(SignatureRepository signatureRepository) {
+    public FileScannerService(SignatureRepository signatureRepository,
+                              SignatureHistoryRepository historyRepository,
+                              SignatureAuditRepository auditRepository) {
         this.signatureRepository = signatureRepository;
+        this.historyRepository = historyRepository;
+        this.auditRepository = auditRepository;
     }
 
     // Добавление сигнатуры
@@ -30,15 +34,142 @@ public class FileScannerService {
         if (signature.getStatus() == null) {
             signature.setStatus("ACTUAL");
         }
-        return signatureRepository.save(signature);
+        SignatureEntity saved = signatureRepository.save(signature);
+
+        // Запись в аудит
+        SignatureAuditEntity audit = new SignatureAuditEntity();
+        audit.setSignatureId(saved.getId());
+        audit.setChangedBy("system");
+        audit.setChangeType("CREATED");
+        audit.setChangedAt(LocalDateTime.now());
+        audit.setFieldsChanged("New signature added");
+        auditRepository.save(audit);
+
+        return saved;
     }
 
-    // Получение всех сигнатур
+    public SignatureEntity updateSignature(Long id, SignatureEntity updatedSignature) {
+        Optional<SignatureEntity> existingOpt = signatureRepository.findById(id);
+        if (!existingOpt.isPresent()) {
+            throw new RuntimeException("Signature not found");
+        }
+
+        SignatureEntity existing = existingOpt.get();
+        if ("DELETED".equals(existing.getStatus())) {
+            throw new RuntimeException("Cannot update DELETED signature");
+        }
+
+        // Сохраняем текущее состояние в историю
+        SignatureHistoryEntity history = new SignatureHistoryEntity();
+        history.setSignatureId(existing.getId());
+        history.setVersionCreatedAt(LocalDateTime.now());
+        history.setThreatName(existing.getThreatName());
+        history.setFirstBytes(existing.getFirstBytes());
+        history.setRemainderHash(existing.getRemainderHash());
+        history.setRemainderLength(existing.getRemainderLength());
+        history.setFileType(existing.getFileType());
+        history.setOffsetStart(existing.getOffsetStart());
+        history.setOffsetEnd(existing.getOffsetEnd());
+        history.setDigitalSignature(existing.getDigitalSignature());
+        history.setStatus(existing.getStatus());
+        history.setUpdatedAt(existing.getUpdatedAt());
+        historyRepository.save(history);
+
+        // Формируем список изменённых полей
+        List<String> fieldsChanged = new ArrayList<>();
+        if (!Objects.equals(updatedSignature.getThreatName(), existing.getThreatName())) {
+            fieldsChanged.add("threatName");
+        }
+        if (!Arrays.equals(updatedSignature.getFirstBytes(), existing.getFirstBytes())) {
+            fieldsChanged.add("firstBytes");
+        }
+        if (!Objects.equals(updatedSignature.getRemainderHash(), existing.getRemainderHash())) {
+            fieldsChanged.add("remainderHash");
+        }
+        if (updatedSignature.getRemainderLength() != existing.getRemainderLength()) {
+            fieldsChanged.add("remainderLength");
+        }
+        if (!Objects.equals(updatedSignature.getFileType(), existing.getFileType())) {
+            fieldsChanged.add("fileType");
+        }
+        if (updatedSignature.getOffsetStart() != existing.getOffsetStart()) {
+            fieldsChanged.add("offsetStart");
+        }
+        if (updatedSignature.getOffsetEnd() != existing.getOffsetEnd()) {
+            fieldsChanged.add("offsetEnd");
+        }
+
+        // Обновляем сигнатуру
+        existing.setThreatName(updatedSignature.getThreatName());
+        existing.setFirstBytes(updatedSignature.getFirstBytes()); // Теперь работает с byte[]
+        existing.setRemainderHash(updatedSignature.getRemainderHash());
+        existing.setRemainderLength(updatedSignature.getRemainderLength());
+        existing.setFileType(updatedSignature.getFileType());
+        existing.setOffsetStart(updatedSignature.getOffsetStart());
+        existing.setOffsetEnd(updatedSignature.getOffsetEnd());
+        existing.setUpdatedAt(LocalDateTime.now());
+        existing.setStatus("ACTUAL");
+        SignatureEntity updated = signatureRepository.save(existing);
+
+        // Запись в аудит
+        SignatureAuditEntity audit = new SignatureAuditEntity();
+        audit.setSignatureId(updated.getId());
+        audit.setChangedBy("system");
+        audit.setChangeType("UPDATED");
+        audit.setChangedAt(LocalDateTime.now());
+        audit.setFieldsChanged(fieldsChanged.isEmpty() ? "No fields changed" : String.join(", ", fieldsChanged));
+        auditRepository.save(audit);
+
+        return updated;
+    }
+
+    // Удаление сигнатуры (установка статуса DELETED)
+    public void deleteSignature(Long id) {
+        Optional<SignatureEntity> existingOpt = signatureRepository.findById(id);
+        if (!existingOpt.isPresent()) {
+            throw new RuntimeException("Signature not found");
+        }
+
+        SignatureEntity existing = existingOpt.get();
+        if ("DELETED".equals(existing.getStatus())) {
+            throw new RuntimeException("Signature already deleted");
+        }
+
+        // Сохраняем текущее состояние в историю
+        SignatureHistoryEntity history = new SignatureHistoryEntity();
+        history.setSignatureId(existing.getId());
+        history.setVersionCreatedAt(LocalDateTime.now());
+        history.setThreatName(existing.getThreatName());
+        history.setFirstBytes(existing.getFirstBytes());
+        history.setRemainderHash(existing.getRemainderHash());
+        history.setRemainderLength(existing.getRemainderLength());
+        history.setFileType(existing.getFileType());
+        history.setOffsetStart(existing.getOffsetStart());
+        history.setOffsetEnd(existing.getOffsetEnd());
+        history.setDigitalSignature(existing.getDigitalSignature());
+        history.setStatus(existing.getStatus());
+        history.setUpdatedAt(existing.getUpdatedAt());
+        historyRepository.save(history);
+
+        // Устанавливаем статус DELETED
+        existing.setStatus("DELETED");
+        existing.setUpdatedAt(LocalDateTime.now());
+        signatureRepository.save(existing);
+
+        // Запись в аудит
+        SignatureAuditEntity audit = new SignatureAuditEntity();
+        audit.setSignatureId(existing.getId());
+        audit.setChangedBy("system");
+        audit.setChangeType("DELETED");
+        audit.setChangedAt(LocalDateTime.now());
+        audit.setFieldsChanged("Status changed to DELETED");
+        auditRepository.save(audit);
+    }
+
     public List<SignatureEntity> getAllSignatures() {
         return signatureRepository.findByStatus("ACTUAL");
     }
 
-    // Сканирование файла
     public List<SignatureScanResult> scanFile(MultipartFile file) throws IOException {
         File tempFile = File.createTempFile("scan_", ".tmp");
         file.transferTo(tempFile);
@@ -96,24 +227,21 @@ public class FileScannerService {
     private boolean checkSignatureMatch(long rollingHash, byte[] window, SignatureEntity signature, RandomAccessFile raf, long offset, long fileLength) throws IOException {
         byte[] signatureFirstBytes = signature.getFirstBytes();
         if (signatureFirstBytes.length != WINDOW_SIZE) {
-            return false; // Убедимся, что длина совпадает
+            return false;
         }
 
-        // Сравнение первых 8 байт
         for (int i = 0; i < WINDOW_SIZE; i++) {
             if (window[i] != signatureFirstBytes[i]) {
                 return false;
             }
         }
 
-        // Проверка смещений
         long startOffset = offset;
         long endOffset = offset + WINDOW_SIZE + signature.getRemainderLength();
         if (startOffset < signature.getOffsetStart() || endOffset > signature.getOffsetEnd()) {
             return false;
         }
 
-        // Проверка "хвоста"
         int remainderLength = signature.getRemainderLength();
         if (remainderLength > 0 && offset + WINDOW_SIZE + remainderLength <= fileLength) {
             byte[] remainder = new byte[remainderLength];
